@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-web-search"
+version = "0.1.0"
+description = "AI-powered web search engine exposed as an MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["mcp", "search", "ai", "web-search"]
+dependencies = [
+    "mcp[cli]>=1.3.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "duckduckgo-search>=6.3.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "lxml>=5.0.0",
+    "cachetools>=5.3.0",
+    "anyio>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.30.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+ai-web-search = "ai_web_search.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_web_search"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
