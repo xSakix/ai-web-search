@@ -4,7 +4,8 @@ import asyncio
 from typing import Optional
 from urllib.parse import urlparse
 
-from duckduckgo_search import DDGS
+from ddgs import DDGS
+from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
 from ..models import ImageResult, SafeSearch, SearchResult, TimeRange
 from .base import SearchProvider
@@ -44,12 +45,13 @@ class DuckDuckGoProvider(SearchProvider):
         safe_search: SafeSearch = SafeSearch.moderate,
     ) -> list[SearchResult]:
         def _run() -> list[SearchResult]:
-            with DDGS() as ddgs:
-                raw = ddgs.text(
+            with DDGS() as d:
+                raw = d.text(
                     query,
                     region=region,
                     safesearch=_SAFE_MAP[safe_search],
                     max_results=num_results,
+                    backend="duckduckgo",
                 )
             return [
                 SearchResult(
@@ -61,7 +63,14 @@ class DuckDuckGoProvider(SearchProvider):
                 for r in (raw or [])
             ]
 
-        return await asyncio.to_thread(_run)
+        try:
+            return await asyncio.to_thread(_run)
+        except RatelimitException as exc:
+            raise RuntimeError(f"DuckDuckGo rate limit reached: {exc}") from exc
+        except TimeoutException as exc:
+            raise RuntimeError(f"DuckDuckGo request timed out: {exc}") from exc
+        except DDGSException as exc:
+            raise RuntimeError(f"DuckDuckGo search error: {exc}") from exc
 
     async def search_news(
         self,
@@ -73,8 +82,8 @@ class DuckDuckGoProvider(SearchProvider):
         timelimit = _TIME_MAP.get(time_range) if time_range else None
 
         def _run() -> list[SearchResult]:
-            with DDGS() as ddgs:
-                raw = ddgs.news(
+            with DDGS() as d:
+                raw = d.news(
                     query,
                     region=region,
                     timelimit=timelimit,
@@ -91,7 +100,14 @@ class DuckDuckGoProvider(SearchProvider):
                 for r in (raw or [])
             ]
 
-        return await asyncio.to_thread(_run)
+        try:
+            return await asyncio.to_thread(_run)
+        except RatelimitException as exc:
+            raise RuntimeError(f"DuckDuckGo rate limit reached: {exc}") from exc
+        except TimeoutException as exc:
+            raise RuntimeError(f"DuckDuckGo request timed out: {exc}") from exc
+        except DDGSException as exc:
+            raise RuntimeError(f"DuckDuckGo search error: {exc}") from exc
 
     async def search_images(
         self,
@@ -101,8 +117,8 @@ class DuckDuckGoProvider(SearchProvider):
         safe_search: SafeSearch = SafeSearch.moderate,
     ) -> list[ImageResult]:
         def _run() -> list[ImageResult]:
-            with DDGS() as ddgs:
-                raw = ddgs.images(
+            with DDGS() as d:
+                raw = d.images(
                     query,
                     region=region,
                     safesearch=_SAFE_MAP[safe_search],
@@ -120,4 +136,11 @@ class DuckDuckGoProvider(SearchProvider):
                 for r in (raw or [])
             ]
 
-        return await asyncio.to_thread(_run)
+        try:
+            return await asyncio.to_thread(_run)
+        except RatelimitException as exc:
+            raise RuntimeError(f"DuckDuckGo rate limit reached: {exc}") from exc
+        except TimeoutException as exc:
+            raise RuntimeError(f"DuckDuckGo request timed out: {exc}") from exc
+        except DDGSException as exc:
+            raise RuntimeError(f"DuckDuckGo search error: {exc}") from exc
