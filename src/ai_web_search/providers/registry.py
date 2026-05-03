@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from ..config import settings
 from .base import SearchProvider
 from .brave import BraveProvider
 from .duckduckgo import DuckDuckGoProvider
@@ -10,13 +9,15 @@ _ALL_PROVIDERS: dict[str, type[SearchProvider]] = {
     "brave": BraveProvider,
 }
 
+_DEFAULT_ORDER = ["duckduckgo", "brave"]
+
 
 class ProviderRegistry:
     """Selects the first available provider according to configured priority."""
 
-    def __init__(self) -> None:
+    def __init__(self, provider_order: list[str] | None = None) -> None:
         self._providers: list[SearchProvider] = []
-        for name in settings.provider_order:
+        for name in (provider_order or _DEFAULT_ORDER):
             cls = _ALL_PROVIDERS.get(name)
             if cls is None:
                 continue

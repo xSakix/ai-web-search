@@ -1,256 +1,176 @@
-"""AI Web Search – MCP Server entry point."""
+"""AI Web Search – MCP Server.
+
+Exposes a self-hosted web search engine over the Model Context Protocol.
+The engine crawls, indexes, and searches web content locally using BM25 ranking.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import time
+import logging
+from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from .cache import SearchCache
 from .config import settings
-from .fetcher import PageFetcher
-from .models import SafeSearch, SearchResponse, TimeRange
-from .providers import ProviderRegistry
+from .engine import CrawlReport, Crawler, Indexer, QueryProcessor, Storage
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "ai-web-search",
     instructions=(
-        "A web search engine. Use `web_search` for general queries, "
-        "`search_news` for recent news, `fetch_page` to read a specific URL, "
-        "and `batch_search` to run multiple queries in parallel."
+        "A self-hosted web search engine. "
+        "Use `crawl_url` to add pages to the index, then `search` to query them. "
+        "Use `get_stats` to inspect the current index, `list_domains` to see what "
+        "has been crawled, and `peek_document` to retrieve the raw text of any "
+        "indexed page."
     ),
 )
 
-_registry = ProviderRegistry()
-_cache = SearchCache(maxsize=settings.cache_max_size, ttl=settings.cache_ttl_seconds)
-_fetcher = PageFetcher()
+# Singleton engine components — shared across tool calls within one server process
+_storage = Storage(db_path=settings.index_db_path)
+_crawler = Crawler(
+    timeout=settings.http_timeout_seconds,
+    crawl_delay=settings.crawl_delay_seconds,
+    max_body_chars=settings.max_body_chars,
+)
+_indexer = Indexer(storage=_storage, crawler=_crawler)
+_query = QueryProcessor(storage=_storage)
 
 
-# ─── Tools ────────────────────────────────────────────────────────────────────
-
-
-@mcp.tool()
-async def web_search(
-    query: str,
-    num_results: int = 10,
-    region: str = "wt-wt",
-    safe_search: SafeSearch = SafeSearch.moderate,
-    provider: Optional[str] = None,
-) -> dict:
-    """Search the web and return a ranked list of results.
-
-    Args:
-        query: The search query string.
-        num_results: Number of results to return (1-20, default 10).
-        region: Region code, e.g. "us-en", "gb-en", "wt-wt" (worldwide).
-        safe_search: Safe search level – "off", "moderate", or "strict".
-        provider: Force a specific provider ("duckduckgo" or "brave").
-                  Defaults to the highest-priority available provider.
-    """
-    num_results = max(1, min(20, num_results))
-    cache_params = {
-        "query": query,
-        "num_results": num_results,
-        "region": region,
-        "safe_search": safe_search.value,
-        "provider": provider or "auto",
-    }
-    cached = _cache.get("web_search", cache_params)
-    if cached:
-        cached["cached"] = True
-        return cached
-
-    p = _registry.get(provider) if provider else _registry.primary
-    if p is None:
-        return {"error": f"Provider '{provider}' is not available."}
-
-    t0 = time.perf_counter()
-    results = await p.search(query, num_results=num_results, region=region, safe_search=safe_search)
-    elapsed = (time.perf_counter() - t0) * 1000
-
-    response = SearchResponse(
-        query=query,
-        provider=p.name,
-        results=results,
-        cached=False,
-        elapsed_ms=round(elapsed, 1),
-    ).model_dump()
-
-    _cache.set("web_search", cache_params, response)
-    return response
+# ── Tools ─────────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-async def search_news(
-    query: str,
-    num_results: int = 10,
-    time_range: Optional[TimeRange] = None,
-    region: str = "wt-wt",
-    provider: Optional[str] = None,
-) -> dict:
-    """Search for recent news articles.
-
-    Args:
-        query: The news search query.
-        num_results: Number of articles to return (1-20, default 10).
-        time_range: Filter by recency – "day", "week", "month", or "year".
-        region: Region code for localised results.
-        provider: Force a specific provider.
-    """
-    num_results = max(1, min(20, num_results))
-    cache_params = {
-        "query": query,
-        "num_results": num_results,
-        "time_range": time_range.value if time_range else None,
-        "region": region,
-        "provider": provider or "auto",
-    }
-    cached = _cache.get("search_news", cache_params)
-    if cached:
-        cached["cached"] = True
-        return cached
-
-    p = _registry.get(provider) if provider else _registry.primary
-    if p is None:
-        return {"error": f"Provider '{provider}' is not available."}
-
-    t0 = time.perf_counter()
-    results = await p.search_news(query, num_results=num_results, time_range=time_range, region=region)
-    elapsed = (time.perf_counter() - t0) * 1000
-
-    response = SearchResponse(
-        query=query,
-        provider=p.name,
-        results=results,
-        cached=False,
-        elapsed_ms=round(elapsed, 1),
-    ).model_dump()
-
-    _cache.set("search_news", cache_params, response)
-    return response
-
-
-@mcp.tool()
-async def search_images(
-    query: str,
-    num_results: int = 10,
-    region: str = "wt-wt",
-    safe_search: SafeSearch = SafeSearch.moderate,
-    provider: Optional[str] = None,
-) -> dict:
-    """Search for images and return metadata (title, URL, thumbnail, dimensions).
-
-    Args:
-        query: The image search query.
-        num_results: Number of results to return (1-20, default 10).
-        region: Region code for localised results.
-        safe_search: Safe search filter level.
-        provider: Force a specific provider.
-    """
-    num_results = max(1, min(20, num_results))
-    cache_params = {
-        "query": query,
-        "num_results": num_results,
-        "region": region,
-        "safe_search": safe_search.value,
-        "provider": provider or "auto",
-    }
-    cached = _cache.get("search_images", cache_params)
-    if cached:
-        cached["cached"] = True
-        return cached
-
-    p = _registry.get(provider) if provider else _registry.primary
-    if p is None:
-        return {"error": f"Provider '{provider}' is not available."}
-
-    t0 = time.perf_counter()
-    results = await p.search_images(query, num_results=num_results, region=region, safe_search=safe_search)
-    elapsed = (time.perf_counter() - t0) * 1000
-
-    response = {
-        "query": query,
-        "provider": p.name,
-        "results": [r.model_dump() for r in results],
-        "cached": False,
-        "elapsed_ms": round(elapsed, 1),
-    }
-    _cache.set("search_images", cache_params, response)
-    return response
-
-
-@mcp.tool()
-async def fetch_page(
+async def crawl_url(
     url: str,
-    extract_links: bool = False,
-    max_chars: Optional[int] = None,
+    max_pages: int = 10,
+    max_depth: int = 1,
+    same_domain_only: bool = True,
 ) -> dict:
-    """Fetch a web page and return its cleaned text content.
+    """Crawl a URL (and its linked pages) and add them to the search index.
 
     Args:
-        url: The URL to fetch.
-        extract_links: If True, also return a list of hyperlinks found on the page.
-        max_chars: Maximum characters of text to return (default from config).
+        url: The seed URL to start crawling from.
+        max_pages: Maximum number of pages to crawl (default 10, max 200).
+        max_depth: How many link-hops away from the seed to follow (0 = seed only).
+        same_domain_only: If True (default), only follow links on the same domain.
+
+    Returns:
+        A report with counts of pages crawled, failed, and skipped.
     """
-    cache_params = {"url": url, "extract_links": extract_links}
-    cached = _cache.get("fetch_page", cache_params)
-    if cached:
-        return cached
+    max_pages = max(1, min(200, max_pages))
+    max_depth = max(0, min(5, max_depth))
 
-    page = await _fetcher.fetch(url, extract_links=extract_links)
-    result = page.model_dump()
-
-    if max_chars and max_chars < len(result.get("text", "")):
-        result["text"] = result["text"][:max_chars]
-
-    _cache.set("fetch_page", cache_params, result)
-    return result
+    report: CrawlReport = await _indexer.crawl_and_index(
+        seed_url=url,
+        max_pages=max_pages,
+        max_depth=max_depth,
+        same_domain_only=same_domain_only,
+    )
+    return {
+        "seed_url": report.seed_url,
+        "pages_crawled": report.pages_crawled,
+        "pages_failed": report.pages_failed,
+        "pages_skipped": report.pages_skipped,
+        "indexed_urls": report.indexed_urls,
+        "errors": report.errors,
+    }
 
 
 @mcp.tool()
-async def batch_search(
-    queries: list[str],
-    num_results: int = 5,
-    region: str = "wt-wt",
-    safe_search: SafeSearch = SafeSearch.moderate,
-) -> list[dict]:
-    """Run multiple web searches in parallel and return all results.
+def search(query: str, top_k: int = 10) -> dict:
+    """Search the local index using BM25 ranking.
 
     Args:
-        queries: List of search query strings (max 10).
-        num_results: Results per query (1-10, default 5).
-        region: Region code applied to all queries.
-        safe_search: Safe search level applied to all queries.
+        query: Free-text search query.
+        top_k: Number of results to return (default 10, max 50).
+
+    Returns:
+        Ranked list of matching documents with title, URL, snippet, and score.
     """
-    queries = queries[:10]
-    num_results = max(1, min(10, num_results))
+    top_k = max(1, min(50, top_k))
+    results = _query.search(query, top_k=top_k)
+    return {
+        "query": results.query,
+        "total_docs_in_index": results.total_docs,
+        "elapsed_ms": results.elapsed_ms,
+        "hits": [
+            {
+                "url": h.url,
+                "title": h.title,
+                "snippet": h.snippet,
+                "score": h.score,
+                "domain": h.domain,
+                "word_count": h.word_count,
+            }
+            for h in results.hits
+        ],
+    }
 
-    tasks = [
-        web_search(q, num_results=num_results, region=region, safe_search=safe_search)
-        for q in queries
-    ]
-    return list(await asyncio.gather(*tasks))
+
+@mcp.tool()
+def get_stats() -> dict:
+    """Return statistics about the current search index."""
+    queue_stats = _storage.queue_stats()
+    return {
+        "documents_indexed": _storage.document_count(),
+        "average_document_length_words": round(_storage.avg_word_count(), 1),
+        "crawl_queue": queue_stats,
+        "index_db_path": str(settings.index_db_path),
+    }
 
 
-# ─── Resources ────────────────────────────────────────────────────────────────
+@mcp.tool()
+def list_domains(limit: int = 20) -> list[dict]:
+    """List the domains present in the index with their document counts.
+
+    Args:
+        limit: Maximum number of domains to return (default 20).
+    """
+    return _storage.domain_stats()[:limit]
+
+
+@mcp.tool()
+def peek_document(url: str) -> dict:
+    """Retrieve the full indexed text of a specific URL.
+
+    Args:
+        url: The exact URL to look up in the index.
+    """
+    doc = _storage.get_document_by_url(url)
+    if doc is None:
+        return {"error": f"URL not found in index: {url}"}
+    return {
+        "url": doc.url,
+        "title": doc.title,
+        "description": doc.description,
+        "body": doc.body[:settings.fetch_max_chars],
+        "word_count": doc.word_count,
+        "domain": doc.domain,
+        "crawled_at": doc.crawled_at,
+    }
+
+
+# ── Resource ──────────────────────────────────────────────────────────────────
 
 
 @mcp.resource("search://config")
 def get_config() -> str:
-    """Current server configuration and available providers."""
+    """Current server configuration."""
     return (
-        f"Available providers: {', '.join(_registry.available)}\n"
-        f"Primary provider: {_registry.primary.name}\n"
-        f"Cache TTL: {settings.cache_ttl_seconds}s  |  "
-        f"Cache size: {_cache.size}/{settings.cache_max_size}\n"
+        f"Index DB: {settings.index_db_path}\n"
+        f"Crawl delay: {settings.crawl_delay_seconds}s\n"
+        f"Max body chars: {settings.max_body_chars}\n"
         f"HTTP timeout: {settings.http_timeout_seconds}s\n"
-        f"Max fetch chars: {settings.fetch_max_chars}"
+        f"Documents indexed: {_storage.document_count()}"
     )
 
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────────────────────────
 
 
 def main() -> None:

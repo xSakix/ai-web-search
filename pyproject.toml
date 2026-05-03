@@ -4,22 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-web-search"
-version = "0.1.0"
-description = "AI-powered web search engine exposed as an MCP server"
+version = "0.2.0"
+description = "A self-hosted web search engine exposed as an MCP server"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-keywords = ["mcp", "search", "ai", "web-search"]
+keywords = ["mcp", "search", "web-crawler", "bm25", "search-engine"]
 dependencies = [
     "mcp[cli]>=1.3.0",
     "httpx>=0.27.0",
     "beautifulsoup4>=4.12.0",
-    "ddgs>=9.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.0.0",
     "lxml>=5.0.0",
-    "cachetools>=5.3.0",
     "anyio>=4.0.0",
 ]
 

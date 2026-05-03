@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,27 +13,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Provider API keys
-    brave_api_key: str = ""
-    serpapi_key: str = ""
+    # Search index
+    index_db_path: Path = Path("search_index.db")
 
-    # Provider order (comma-separated)
-    search_providers: str = "duckduckgo,brave"
-
-    # Cache
-    cache_ttl_seconds: int = 300
-    cache_max_size: int = 512
+    # Crawler
+    crawl_delay_seconds: float = 1.0
+    max_body_chars: int = 50_000
 
     # HTTP
     http_timeout_seconds: float = 15.0
-    http_max_retries: int = 2
 
-    # Fetcher
-    fetch_max_chars: int = 8000
-
-    @property
-    def provider_order(self) -> list[str]:
-        return [p.strip() for p in self.search_providers.split(",") if p.strip()]
+    # Fetcher (for peek_document truncation)
+    fetch_max_chars: int = 8_000
 
 
 settings = Settings()

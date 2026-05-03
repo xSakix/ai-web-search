@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Optional
 from urllib.parse import urlparse
 
+import os
+
 import httpx
 
-from ..config import settings
 from ..models import ImageResult, SafeSearch, SearchResult, TimeRange
 from .base import SearchProvider
 
@@ -36,13 +37,13 @@ class BraveProvider(SearchProvider):
     name = "brave"
 
     def is_available(self) -> bool:
-        return bool(settings.brave_api_key)
+        return bool(os.environ.get("BRAVE_API_KEY", ""))
 
     def _headers(self) -> dict[str, str]:
         return {
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
-            "X-Subscription-Token": settings.brave_api_key,
+            "X-Subscription-Token": os.environ.get("BRAVE_API_KEY", ""),
         }
 
     async def search(
@@ -59,7 +60,7 @@ class BraveProvider(SearchProvider):
             "safesearch": _SAFE_MAP[safe_search],
             "text_decorations": False,
         }
-        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=float(os.environ.get("HTTP_TIMEOUT_SECONDS", "15"))) as client:
             resp = await client.get(
                 f"{_BASE}/web/search", headers=self._headers(), params=params
             )
@@ -93,7 +94,7 @@ class BraveProvider(SearchProvider):
         if time_range:
             params["freshness"] = _FRESH_MAP[time_range]
 
-        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=float(os.environ.get("HTTP_TIMEOUT_SECONDS", "15"))) as client:
             resp = await client.get(
                 f"{_BASE}/news/search", headers=self._headers(), params=params
             )
@@ -124,7 +125,7 @@ class BraveProvider(SearchProvider):
             "count": min(num_results, 20),
             "safesearch": _SAFE_MAP[safe_search],
         }
-        async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=float(os.environ.get("HTTP_TIMEOUT_SECONDS", "15"))) as client:
             resp = await client.get(
                 f"{_BASE}/images/search", headers=self._headers(), params=params
             )
