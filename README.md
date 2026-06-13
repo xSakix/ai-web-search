@@ -41,7 +41,7 @@ The server stores its index in `search_index.db` in the current directory (confi
 | Tool | Description |
 |------|-------------|
 | `crawl_url(url, max_pages?, max_depth?, same_domain_only?)` | Crawl a URL and add pages to the index |
-| `search(query, top_k?)` | BM25 search over the local index |
+| `search(query, top_k?, domain?)` | BM25 search with phrase support and domain filter |
 | `get_stats()` | Index and crawl-queue statistics |
 | `list_domains(limit?)` | Domain distribution in the index |
 | `peek_document(url)` | Retrieve the full indexed text of a URL |
@@ -57,10 +57,16 @@ The server stores its index in `search_index.db` in the current directory (confi
 Returns a report: pages crawled / failed / skipped, list of indexed URLs, errors.
 
 **`search`**
-- `query` – free-text search query
+- `query` – free-text query; wrap terms in double-quotes for phrase search, e.g. `python "machine learning" tutorial`
 - `top_k` – results to return (default 10, max 50)
+- `domain` – restrict results to an exact domain, e.g. `docs.python.org` (optional)
 
 Returns ranked hits with `url`, `title`, `snippet`, `score`, `domain`, `word_count`.
+
+Ranking features:
+- **BM25** base score — standard term-frequency / inverse-document-frequency ranking
+- **Phrase filter** — quoted terms must appear adjacent in the document; filtered out otherwise
+- **Title boost** — documents whose title contains any free query term receive a 2× score multiplier
 
 ## Claude Desktop Integration
 
@@ -103,4 +109,4 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-54 tests covering tokenizer, BM25 math, storage, crawler, indexer, and query processor.
+76 tests covering tokenizer, BM25 math, storage, crawler, indexer, query processor, phrase search, domain filter, and title boosting.
