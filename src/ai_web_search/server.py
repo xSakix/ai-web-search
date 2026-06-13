@@ -82,18 +82,20 @@ async def crawl_url(
 
 
 @mcp.tool()
-def search(query: str, top_k: int = 10) -> dict:
+def search(query: str, top_k: int = 10, domain: Optional[str] = None) -> dict:
     """Search the local index using BM25 ranking.
 
     Args:
-        query: Free-text search query.
+        query: Free-text query. Wrap terms in double-quotes for phrase search,
+               e.g. 'python "machine learning" tutorial'.
         top_k: Number of results to return (default 10, max 50).
+        domain: Restrict results to this exact domain, e.g. 'docs.python.org'.
 
     Returns:
         Ranked list of matching documents with title, URL, snippet, and score.
     """
     top_k = max(1, min(50, top_k))
-    results = _query.search(query, top_k=top_k)
+    results = _query.search(query, top_k=top_k, domain=domain)
     return {
         "query": results.query,
         "total_docs_in_index": results.total_docs,

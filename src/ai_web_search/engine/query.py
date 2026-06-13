@@ -7,8 +7,12 @@ import time
 from dataclasses import dataclass, field
 
 from .bm25 import BM25, ScoredDoc
-from .storage import Storage
+from .storage import Document, Storage
 from .tokenizer import tokenize
+
+PHRASE_RE = re.compile(r'"([^"]*)"')
+
+_WINDOW = 30  # words each side of a match for snippet generation
 
 
 @dataclass
@@ -27,9 +31,6 @@ class SearchResults:
     hits: list[SearchHit]
     total_docs: int
     elapsed_ms: float = 0.0
-
-
-_WINDOW = 30  # words each side of a match for snippet generation
 
 
 def _build_snippet(body: str, query_terms: list[str], max_chars: int = 200) -> str:
@@ -69,29 +70,82 @@ def _build_snippet(body: str, query_terms: list[str], max_chars: int = 200) -> s
     return snippet
 
 
+def _parse_query(raw_query: str) -> tuple[list[list[str]], list[str]]:
+    """Split raw_query into phrase token-lists and free tokens."""
+    phrases: list[list[str]] = []
+    remainder = raw_query
+    for m in PHRASE_RE.finditer(raw_query):
+        phrase_tokens = tokenize(m.group(1))
+        if phrase_tokens:
+            phrases.append(phrase_tokens)
+        remainder = remainder.replace(m.group(0), " ", 1)
+    free_tokens = tokenize(remainder)
+    return phrases, free_tokens
+
+
+def _doc_contains_phrase(
+    phrase_tokens: list[str], postings_map: dict[str, list[int]]
+) -> bool:
+    """Return True if phrase_tokens appear consecutively in postings_map."""
+    if not all(t in postings_map for t in phrase_tokens):
+        return False
+    position_sets = {t: set(postings_map[t]) for t in phrase_tokens}
+    for anchor in sorted(position_sets[phrase_tokens[0]]):
+        if all(
+            (anchor + i) in position_sets[tok]
+            for i, tok in enumerate(phrase_tokens[1:], 1)
+        ):
+            return True
+    return False
+
+
 class QueryProcessor:
     def __init__(self, storage: Storage) -> None:
         self._storage = storage
 
-    def search(self, raw_query: str, top_k: int = 10) -> SearchResults:
+    def search(
+        self, raw_query: str, top_k: int = 10, domain: str | None = None
+    ) -> SearchResults:
         t0 = time.perf_counter()
-        tokens = tokenize(raw_query)
-        if not tokens:
-            return SearchResults(query=raw_query, hits=[], total_docs=self._storage.document_count())
+        phrases, free_tokens = _parse_query(raw_query)
+        all_tokens = free_tokens + [t for ph in phrases for t in ph]
+
+        if not all_tokens:
+            return SearchResults(
+                query=raw_query, hits=[], total_docs=self._storage.document_count()
+            )
 
         num_docs = self._storage.document_count()
         avg_len = self._storage.avg_word_count()
         bm25 = BM25(num_docs=max(num_docs, 1), avg_doc_len=max(avg_len, 1))
 
-        # Gather per-term postings and build doc→{term: (tf, df)} map
+        # Domain pre-filter
+        if domain is not None:
+            allowed = self._storage.get_doc_ids_for_domain(domain)
+            if not allowed:
+                elapsed = (time.perf_counter() - t0) * 1000
+                return SearchResults(
+                    query=raw_query,
+                    hits=[],
+                    total_docs=num_docs,
+                    elapsed_ms=round(elapsed, 1),
+                )
+        else:
+            allowed = None
+
+        # Gather per-term postings, building both scoring and position structures
         doc_terms: dict[int, list[tuple[str, int, int]]] = {}
-        for term in set(tokens):
+        doc_positions: dict[int, dict[str, list[int]]] = {}
+        for term in set(all_tokens):
             postings = self._storage.get_postings(term)
             df = len(postings)
             for posting in postings:
                 doc_id = posting["doc_id"]
+                if allowed is not None and doc_id not in allowed:
+                    continue
                 tf = posting["frequency"]
                 doc_terms.setdefault(doc_id, []).append((term, tf, df))
+                doc_positions.setdefault(doc_id, {})[term] = posting["positions"]
 
         if not doc_terms:
             elapsed = (time.perf_counter() - t0) * 1000
@@ -103,20 +157,42 @@ class QueryProcessor:
             )
 
         # Score all candidate documents
+        _docs: dict[int, Document] = {}
         scored: list[ScoredDoc] = []
         for doc_id, term_postings in doc_terms.items():
             doc = self._storage.get_document(doc_id)
             if doc is None:
                 continue
+            _docs[doc_id] = doc
             scored.append(bm25.score(doc_id, doc.word_count or 1, term_postings))
 
+        # Title boost: free-token hits in the title get a 2× multiplier
+        query_token_set = set(free_tokens)
+        if query_token_set:
+            for sd in scored:
+                doc = _docs.get(sd.doc_id)
+                if doc and set(tokenize(doc.title)) & query_token_set:
+                    sd.score *= 2.0
+
         scored.sort(key=lambda s: s.score, reverse=True)
+
+        # Phrase filter: remove docs where any required phrase is absent
+        if phrases:
+            scored = [
+                sd
+                for sd in scored
+                if all(
+                    _doc_contains_phrase(ph, doc_positions.get(sd.doc_id, {}))
+                    for ph in phrases
+                )
+            ]
+
         top = scored[:top_k]
 
-        # Build hit objects
+        # Build hit objects from the cached _docs map
         hits: list[SearchHit] = []
         for sd in top:
-            doc = self._storage.get_document(sd.doc_id)
+            doc = _docs.get(sd.doc_id)
             if doc is None:
                 continue
             snippet = _build_snippet(doc.body, sd.term_hits)

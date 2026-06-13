@@ -136,6 +136,12 @@ class Storage:
         ).fetchone()
         return _row_to_doc(row) if row else None
 
+    def get_doc_ids_for_domain(self, domain: str) -> frozenset[int]:
+        rows = self._connect().execute(
+            "SELECT id FROM documents WHERE domain = ?", (domain,)
+        ).fetchall()
+        return frozenset(r["id"] for r in rows)
+
     def document_count(self) -> int:
         return self._connect().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
 
