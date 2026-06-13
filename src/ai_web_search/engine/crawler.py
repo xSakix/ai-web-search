@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
@@ -74,7 +75,6 @@ def _extract_text(soup: BeautifulSoup) -> str:
     for tag in soup(["script", "style", "noscript", "head", "nav",
                      "header", "footer", "aside", "form", "iframe", "svg"]):
         tag.decompose()
-    import re
     text = soup.get_text(separator=" ", strip=True)
     return re.sub(r"\s{2,}", " ", text).strip()
 

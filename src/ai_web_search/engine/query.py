@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 
 from .bm25 import BM25, ScoredDoc
@@ -60,7 +61,12 @@ def _build_snippet(body: str, query_terms: list[str], max_chars: int = 200) -> s
     if end < len(words):
         snippet = snippet + "…"
 
-    return snippet[:max_chars]
+    if len(snippet) > max_chars:
+        truncated = snippet[:max_chars].rsplit(" ", 1)[0]
+        if not truncated.endswith("…"):
+            truncated += "…"
+        snippet = truncated
+    return snippet
 
 
 class QueryProcessor:
@@ -68,8 +74,6 @@ class QueryProcessor:
         self._storage = storage
 
     def search(self, raw_query: str, top_k: int = 10) -> SearchResults:
-        import time
-
         t0 = time.perf_counter()
         tokens = tokenize(raw_query)
         if not tokens:
