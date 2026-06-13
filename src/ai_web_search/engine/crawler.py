@@ -6,7 +6,6 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -84,20 +83,24 @@ class RobotsCache:
 
     def __init__(self, user_agent: str = "AIWebSearchBot") -> None:
         self._cache: dict[str, RobotFileParser] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
         self._ua = user_agent
 
     async def can_fetch(self, client: httpx.AsyncClient, url: str) -> bool:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
-        if origin not in self._cache:
-            rp = RobotFileParser()
-            robots_url = f"{origin}/robots.txt"
-            try:
-                resp = await client.get(robots_url, timeout=5)
-                rp.parse(resp.text.splitlines())
-            except Exception:
-                rp.allow_all = True
-            self._cache[origin] = rp
+        if origin not in self._locks:
+            self._locks[origin] = asyncio.Lock()
+        async with self._locks[origin]:
+            if origin not in self._cache:
+                rp = RobotFileParser()
+                robots_url = f"{origin}/robots.txt"
+                try:
+                    resp = await client.get(robots_url, timeout=5)
+                    rp.parse(resp.text.splitlines())
+                except Exception:
+                    rp.allow_all = True
+                self._cache[origin] = rp
         return self._cache[origin].can_fetch(self._ua, url)
 
 
@@ -123,7 +126,7 @@ class Crawler:
 
     async def _wait_for_politeness(self, domain: str) -> None:
         last = self._domain_last_fetch.get(domain, 0.0)
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         wait = self._crawl_delay - (now - last)
         if wait > 0:
             await asyncio.sleep(wait)
@@ -138,7 +141,7 @@ class Crawler:
             return CrawlResult(url=url, status_code=0, error="Blocked by robots.txt")
 
         await self._wait_for_politeness(domain)
-        self._domain_last_fetch[domain] = asyncio.get_event_loop().time()
+        self._domain_last_fetch[domain] = asyncio.get_running_loop().time()
 
         try:
             resp = await self._client.get(url)
@@ -155,11 +158,11 @@ class Crawler:
 
         content_type = resp.headers.get("content-type", "")
         if "text/html" not in content_type and "application/xhtml" not in content_type:
-            return CrawlResult(url=str(resp.url), status_code=resp.status_code,
+            return CrawlResult(url=final_url, status_code=resp.status_code,
                                error=f"Non-HTML content-type: {content_type}")
 
         if resp.status_code >= 400:
-            return CrawlResult(url=str(resp.url), status_code=resp.status_code,
+            return CrawlResult(url=final_url, status_code=resp.status_code,
                                error=f"HTTP {resp.status_code}")
 
         soup = BeautifulSoup(resp.text, "lxml")
@@ -172,11 +175,12 @@ class Crawler:
         if meta_desc and meta_desc.get("content"):
             description = meta_desc["content"].strip()
 
+        # Extract links before _extract_text mutates the tree
+        links = _extract_links(soup, final_url)
         body = _extract_text(soup)[: self._max_body_chars]
-        links = _extract_links(soup, str(resp.url))
 
         return CrawlResult(
-            url=str(resp.url),
+            url=final_url,
             status_code=resp.status_code,
             title=title,
             body=body,

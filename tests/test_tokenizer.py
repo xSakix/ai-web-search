@@ -47,4 +47,4 @@ def test_hyphenated_terms():
     tokens = tokenize("state-of-the-art machine learning")
     assert "state" in tokens
     assert "art" in tokens
-    assert "machine" in tokens
+    assert "machin" in tokens  # Porter stem of "machine"

@@ -17,6 +17,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import settings
 from .engine import CrawlReport, Crawler, Indexer, QueryProcessor, Storage
+from .engine.tokenizer import TOKENIZER_VERSION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ _auth_kwargs: dict = {}
 if settings.api_key:
     _auth_kwargs = {
         "auth": AuthSettings(issuer_url="http://localhost"),
-        "token_verifier": _APIKeyVerifier(settings.api_key),
+        "token_verifier": _APIKeyVerifier(settings.api_key.get_secret_value()),
     }
 
 mcp = FastMCP(
@@ -55,6 +56,20 @@ mcp = FastMCP(
 
 # Singleton engine components — shared across tool calls within one server process
 _storage = Storage(db_path=settings.index_db_path)
+
+# Warn if the on-disk index was built with a different tokenizer version
+_indexed_tv = _storage.get_metadata("tokenizer_version")
+if _indexed_tv is None:
+    _storage.set_metadata("tokenizer_version", TOKENIZER_VERSION)
+elif _indexed_tv != TOKENIZER_VERSION:
+    logger.warning(
+        "Index was built with tokenizer v%s; current is v%s. "
+        "Re-crawl all content to avoid stale results: delete %s and re-run crawl_url.",
+        _indexed_tv,
+        TOKENIZER_VERSION,
+        settings.index_db_path,
+    )
+
 _crawler = Crawler(
     timeout=settings.http_timeout_seconds,
     crawl_delay=settings.crawl_delay_seconds,
@@ -105,7 +120,7 @@ async def crawl_url(
 
 
 @mcp.tool()
-def search(query: str, top_k: int = 10, domain: Optional[str] = None) -> dict:
+def search(query: str, top_k: int = 10, domain: Optional[str] = None, offset: int = 0) -> dict:
     """Search the local index using BM25 ranking.
 
     Args:
@@ -113,14 +128,17 @@ def search(query: str, top_k: int = 10, domain: Optional[str] = None) -> dict:
                e.g. 'python "machine learning" tutorial'.
         top_k: Number of results to return (default 10, max 50).
         domain: Restrict results to this exact domain, e.g. 'docs.python.org'.
+        offset: Number of results to skip for pagination (default 0).
 
     Returns:
         Ranked list of matching documents with title, URL, snippet, and score.
     """
     top_k = max(1, min(50, top_k))
-    results = _query.search(query, top_k=top_k, domain=domain)
+    offset = max(0, offset)
+    results = _query.search(query, top_k=top_k, domain=domain, offset=offset)
     return {
         "query": results.query,
+        "offset": offset,
         "total_docs_in_index": results.total_docs,
         "elapsed_ms": results.elapsed_ms,
         "hits": [
@@ -160,6 +178,24 @@ def list_domains(limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
+def prune_index(confirm: bool = False) -> dict:
+    """Remove completed and failed entries from the crawl queue to reclaim space.
+
+    Args:
+        confirm: Must be True to actually execute (prevents accidental calls).
+
+    Returns:
+        Number of rows deleted, or a dry-run count if confirm is False.
+    """
+    if not confirm:
+        stats = _storage.queue_stats()
+        prunable = sum(v for k, v in stats.items() if k in ("crawled", "failed"))
+        return {"prunable_rows": prunable, "message": "Pass confirm=true to proceed"}
+    deleted = _storage.prune_queue()
+    return {"deleted_rows": deleted}
+
+
+@mcp.tool()
 def peek_document(url: str) -> dict:
     """Retrieve the full indexed text of a specific URL.
 
@@ -187,11 +223,11 @@ def peek_document(url: str) -> dict:
 def get_config() -> str:
     """Current server configuration."""
     return (
-        f"Index DB: {settings.index_db_path}\n"
         f"Crawl delay: {settings.crawl_delay_seconds}s\n"
         f"Max body chars: {settings.max_body_chars}\n"
         f"HTTP timeout: {settings.http_timeout_seconds}s\n"
-        f"Documents indexed: {_storage.document_count()}"
+        f"Documents indexed: {_storage.document_count()}\n"
+        f"Auth enabled: {'yes' if settings.api_key else 'no'}"
     )
 
 
@@ -199,7 +235,11 @@ def get_config() -> str:
 
 
 def main() -> None:
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        # Close the httpx connection pool on any exit (normal, SIGINT, SIGTERM)
+        asyncio.run(_crawler.aclose())
 
 
 if __name__ == "__main__":

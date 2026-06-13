@@ -36,14 +36,14 @@ def _make_store(*docs: dict) -> tuple[Storage, QueryProcessor]:
 
 def test_parse_query_extracts_phrase_and_free():
     phrases, free = _parse_query('python "machine learning" tutorial')
-    assert phrases == [["machine", "learning"]]
-    assert "python" in free and "tutorial" in free
+    assert phrases == [["machin", "learn"]]  # Porter stems
+    assert "python" in free and "tutori" in free  # Porter stems
 
 
 def test_parse_query_no_phrases():
     phrases, free = _parse_query("python tutorial")
     assert phrases == []
-    assert "python" in free and "tutorial" in free
+    assert "python" in free and "tutori" in free  # Porter stem of "tutorial"
 
 
 def test_doc_contains_phrase_adjacent():

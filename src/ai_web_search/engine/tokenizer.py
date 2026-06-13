@@ -1,8 +1,12 @@
-"""Text tokenizer: lowercase, strip punctuation, remove stopwords."""
+"""Text tokenizer: lowercase, strip punctuation, remove stopwords, Porter-stem."""
 
 from __future__ import annotations
 
 import re
+
+import snowballstemmer
+
+TOKENIZER_VERSION = "2"
 
 # Compact English stopword list — common words that carry no search signal
 _STOPWORDS: frozenset[str] = frozenset(
@@ -24,27 +28,33 @@ _STOPWORDS: frozenset[str] = frozenset(
 )
 
 _NON_ALPHA = re.compile(r"[^a-z0-9]+")
+_stemmer = snowballstemmer.stemmer("english")
 
 
 def tokenize(text: str) -> list[str]:
-    """Return a list of normalised, non-stopword tokens from *text*."""
+    """Return a list of normalised, stemmed, non-stopword tokens from *text*."""
     lowered = text.lower()
     tokens = _NON_ALPHA.split(lowered)
-    return [t for t in tokens if t and t not in _STOPWORDS and len(t) > 1]
+    return [
+        _stemmer.stemWord(t)
+        for t in tokens
+        if t and t not in _STOPWORDS and len(t) > 1
+    ]
 
 
 def tokenize_with_positions(text: str) -> dict[str, tuple[int, list[int]]]:
-    """Return {term: (frequency, [position, ...])} for each token."""
+    """Return {stem: (frequency, [position, ...])} for each token."""
     result: dict[str, tuple[int, list[int]]] = {}
     lowered = text.lower()
     tokens = _NON_ALPHA.split(lowered)
     for pos, tok in enumerate(tokens):
         if not tok or tok in _STOPWORDS or len(tok) <= 1:
             continue
-        if tok in result:
-            freq, positions = result[tok]
+        stemmed = _stemmer.stemWord(tok)
+        if stemmed in result:
+            freq, positions = result[stemmed]
             positions.append(pos)
-            result[tok] = (freq + 1, positions)
+            result[stemmed] = (freq + 1, positions)
         else:
-            result[tok] = (1, [pos])
+            result[stemmed] = (1, [pos])
     return result

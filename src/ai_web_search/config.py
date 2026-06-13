@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     fetch_max_chars: int = 8_000
 
     # Authentication — required as Bearer token on HTTP transports when set
-    api_key: str | None = None
+    api_key: SecretStr | None = None
 
     @field_validator("index_db_path", mode="after")
     @classmethod

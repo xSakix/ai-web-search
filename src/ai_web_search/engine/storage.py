@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,11 +61,19 @@ CREATE TABLE IF NOT EXISTS crawl_queue (
     added_at   TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_inverted_term  ON inverted_index (term);
 CREATE INDEX IF NOT EXISTS idx_inverted_docid ON inverted_index (doc_id);
 CREATE INDEX IF NOT EXISTS idx_queue_status   ON crawl_queue (status);
 CREATE INDEX IF NOT EXISTS idx_doc_domain     ON documents (domain);
 """
+
+
+_STATS_TTL = 10.0  # seconds before re-querying corpus stats
 
 
 class Storage:
@@ -73,6 +82,8 @@ class Storage:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self._db_path = str(db_path)
         self._local = threading.local()
+        self._stats_cache: dict[str, float | int] = {}
+        self._stats_ts: float = 0.0
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -98,7 +109,36 @@ class Storage:
         with self._tx() as conn:
             conn.executescript(_DDL)
 
+    # ── Metadata ──────────────────────────────────────────────────────────────
+
+    def get_metadata(self, key: str) -> Optional[str]:
+        row = self._connect().execute(
+            "SELECT value FROM metadata WHERE key=?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "INSERT INTO metadata (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+
     # ── Documents ─────────────────────────────────────────────────────────────
+
+    def _refresh_stats(self) -> None:
+        now = time.monotonic()
+        if now - self._stats_ts < _STATS_TTL:
+            return
+        conn = self._connect()
+        self._stats_cache["count"] = conn.execute(
+            "SELECT COUNT(*) FROM documents"
+        ).fetchone()[0]
+        self._stats_cache["avg"] = float(
+            conn.execute("SELECT AVG(word_count) FROM documents").fetchone()[0] or 0
+        )
+        self._stats_ts = now
 
     def upsert_document(self, doc: Document) -> int:
         with self._tx() as conn:
@@ -122,7 +162,8 @@ class Storage:
             # Always SELECT after upsert: SQLite's lastrowid may return the
             # speculative autoincrement value (not the existing id) on conflict.
             row = conn.execute("SELECT id FROM documents WHERE url=?", (doc.url,)).fetchone()
-            return row["id"]
+        self._stats_ts = 0.0  # Invalidate cache after write
+        return row["id"]
 
     def get_document(self, doc_id: int) -> Optional[Document]:
         row = self._connect().execute(
@@ -143,11 +184,12 @@ class Storage:
         return frozenset(r["id"] for r in rows)
 
     def document_count(self) -> int:
-        return self._connect().execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        self._refresh_stats()
+        return int(self._stats_cache.get("count", 0))
 
     def avg_word_count(self) -> float:
-        row = self._connect().execute("SELECT AVG(word_count) FROM documents").fetchone()
-        return float(row[0] or 0)
+        self._refresh_stats()
+        return float(self._stats_cache.get("avg", 0.0))
 
     # ── Inverted index ────────────────────────────────────────────────────────
 
@@ -228,6 +270,14 @@ class Storage:
             "SELECT 1 FROM crawl_queue WHERE url=?", (url,)
         ).fetchone()
         return row is not None
+
+    def prune_queue(self) -> int:
+        """Delete crawled and failed queue entries. Returns the number of rows removed."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM crawl_queue WHERE status IN ('crawled', 'failed')"
+            )
+            return cur.rowcount
 
     def domain_stats(self) -> list[dict]:
         rows = self._connect().execute(

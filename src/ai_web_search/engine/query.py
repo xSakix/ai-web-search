@@ -34,32 +34,38 @@ class SearchResults:
 
 
 def _build_snippet(body: str, query_terms: list[str], max_chars: int = 200) -> str:
-    """Extract a sentence-aware snippet containing as many query terms as possible."""
+    """Extract a snippet from the word-window richest in query terms (O(n) sliding window)."""
     if not body:
         return ""
 
-    lower_body = body.lower()
-    best_start = 0
-    best_hits = 0
-
     words = body.split()
-    lower_words = lower_body.split()
+    n = len(words)
+    if n == 0:
+        return ""
 
-    # Find the word-window with the most query-term hits
-    for i in range(len(lower_words)):
-        window = lower_words[i : i + _WINDOW * 2]
-        hits = sum(1 for t in query_terms if any(t in w for w in window))
-        if hits > best_hits:
-            best_hits = hits
-            best_start = i
+    term_set = set(query_terms)
+    window = _WINDOW * 2
+
+    # 1 if any query term is a substring of this word, else 0
+    hits = [int(any(t in w.lower() for t in term_set)) for w in words]
+
+    # Initialise first window
+    win_sum = sum(hits[:window])
+    best_sum, best_start = win_sum, 0
+
+    # Slide across remaining positions
+    for i in range(1, max(1, n - window + 1)):
+        win_sum += hits[min(i + window - 1, n - 1)] - hits[i - 1]
+        if win_sum > best_sum:
+            best_sum, best_start = win_sum, i
 
     start = max(0, best_start - 5)
-    end = min(len(words), best_start + _WINDOW * 2)
+    end = min(n, best_start + window)
     snippet = " ".join(words[start:end])
 
     if start > 0:
         snippet = "…" + snippet
-    if end < len(words):
+    if end < n:
         snippet = snippet + "…"
 
     if len(snippet) > max_chars:
@@ -104,7 +110,7 @@ class QueryProcessor:
         self._storage = storage
 
     def search(
-        self, raw_query: str, top_k: int = 10, domain: str | None = None
+        self, raw_query: str, top_k: int = 10, domain: str | None = None, offset: int = 0
     ) -> SearchResults:
         t0 = time.perf_counter()
         phrases, free_tokens = _parse_query(raw_query)
@@ -187,7 +193,7 @@ class QueryProcessor:
                 )
             ]
 
-        top = scored[:top_k]
+        top = scored[offset : offset + top_k]
 
         # Build hit objects from the cached _docs map
         hits: list[SearchHit] = []
