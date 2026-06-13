@@ -147,6 +147,12 @@ class Crawler:
         except httpx.RequestError as exc:
             return CrawlResult(url=url, status_code=0, error=str(exc))
 
+        # Verify the final URL after redirects is still crawlable (SSRF guard)
+        final_url = str(resp.url)
+        if not _is_crawlable(final_url):
+            return CrawlResult(url=final_url, status_code=0,
+                               error="Post-redirect URL not crawlable")
+
         content_type = resp.headers.get("content-type", "")
         if "text/html" not in content_type and "application/xhtml" not in content_type:
             return CrawlResult(url=str(resp.url), status_code=resp.status_code,

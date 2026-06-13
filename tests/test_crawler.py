@@ -164,3 +164,30 @@ async def test_crawler_rejects_non_html():
 
     assert "Non-HTML" in result.error
     await crawler.aclose()
+
+
+@pytest.mark.asyncio
+async def test_crawler_rejects_post_redirect_blocked_extension():
+    # Simulate a redirect from a clean URL to one with a blocked extension (.js).
+    # The post-redirect SSRF guard must catch this even though the initial URL was clean.
+    transport = _make_transport({
+        "https://legit.com/robots.txt": httpx.Response(200, text=""),
+        "https://legit.com/page": httpx.Response(
+            301,
+            headers={"location": "https://legit.com/bundle.js"},
+            text="",
+        ),
+        "https://legit.com/bundle.js": httpx.Response(
+            200, text="alert(1)",
+            headers={"content-type": "text/html"},
+        ),
+    })
+    crawler = Crawler(crawl_delay=0)
+    crawler._client = httpx.AsyncClient(
+        transport=transport, follow_redirects=True, max_redirects=5
+    )
+
+    result = await crawler.fetch("https://legit.com/page")
+
+    assert "Post-redirect" in result.error
+    await crawler.aclose()

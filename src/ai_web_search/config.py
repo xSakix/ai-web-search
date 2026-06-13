@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,14 @@ class Settings(BaseSettings):
 
     # Fetcher (for peek_document truncation)
     fetch_max_chars: int = 8_000
+
+    # Authentication — required as Bearer token on HTTP transports when set
+    api_key: str | None = None
+
+    @field_validator("index_db_path", mode="after")
+    @classmethod
+    def _resolve_db_path(cls, v: Path) -> Path:
+        return v.resolve()
 
 
 settings = Settings()

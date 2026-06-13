@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from mcp.server.auth.provider import AccessToken, TokenVerifier
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 
 from .config import settings
@@ -18,6 +20,26 @@ from .engine import CrawlReport, Crawler, Indexer, QueryProcessor, Storage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class _APIKeyVerifier:
+    """TokenVerifier that accepts a single static API key as a Bearer token."""
+
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if token == self._key:
+            return AccessToken(token=token, client_id="api-client", scopes=[])
+        return None
+
+
+_auth_kwargs: dict = {}
+if settings.api_key:
+    _auth_kwargs = {
+        "auth": AuthSettings(issuer_url="http://localhost"),
+        "token_verifier": _APIKeyVerifier(settings.api_key),
+    }
 
 mcp = FastMCP(
     "ai-web-search",
@@ -28,6 +50,7 @@ mcp = FastMCP(
         "has been crawled, and `peek_document` to retrieve the raw text of any "
         "indexed page."
     ),
+    **_auth_kwargs,
 )
 
 # Singleton engine components — shared across tool calls within one server process

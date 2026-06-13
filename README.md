@@ -82,6 +82,22 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+## Authentication
+
+The default transport is **stdio** (Claude Desktop and other local clients). Stdio is
+inherently private — the OS restricts access to the launching process, so no credentials
+are needed.
+
+When running over the network with an HTTP transport, set `API_KEY` and clients must
+send `Authorization: Bearer <key>` on every request:
+
+```bash
+export API_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
+ai-web-search --transport sse          # or --transport streamable-http
+```
+
+When `API_KEY` is unset, HTTP transports run without authentication.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -91,6 +107,7 @@ Add to `claude_desktop_config.json`:
 | `MAX_BODY_CHARS` | `50000` | Max characters extracted from each page body |
 | `HTTP_TIMEOUT_SECONDS` | `15` | HTTP request timeout |
 | `FETCH_MAX_CHARS` | `8000` | Max characters returned by `peek_document` |
+| `API_KEY` | *(unset)* | Bearer token enforced on HTTP transports; no auth when unset |
 
 Copy `.env.example` to `.env` and edit as needed.
 
