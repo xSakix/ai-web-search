@@ -1,9 +1,11 @@
 """Crawler tests using httpx mock transport — no real network calls."""
 
+import asyncio
+
 import httpx
 import pytest
 
-from ai_web_search.engine.crawler import Crawler, _extract_links, _extract_text, _is_crawlable
+from ai_web_search.engine.crawler import Crawler, RobotsCache, _extract_links, _extract_text, _is_crawlable
 from bs4 import BeautifulSoup
 
 SAMPLE_HTML = """
@@ -164,6 +166,28 @@ async def test_crawler_rejects_non_html():
 
     assert "Non-HTML" in result.error
     await crawler.aclose()
+
+
+@pytest.mark.asyncio
+async def test_robots_cache_fetches_once_concurrently():
+    fetch_count = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal fetch_count
+        if "/robots.txt" in str(request.url):
+            fetch_count += 1
+        return httpx.Response(200, text="User-agent: *\nAllow: /")
+
+    transport = httpx.MockTransport(handle)
+    async with httpx.AsyncClient(transport=transport) as client:
+        cache = RobotsCache()
+        r1, r2 = await asyncio.gather(
+            cache.can_fetch(client, "https://example.com/a"),
+            cache.can_fetch(client, "https://example.com/b"),
+        )
+
+    assert r1 and r2        # both URLs allowed
+    assert fetch_count == 1  # robots.txt fetched only once despite concurrent calls
 
 
 @pytest.mark.asyncio

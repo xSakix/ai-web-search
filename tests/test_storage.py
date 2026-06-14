@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from ai_web_search.engine.storage import Document, Storage
@@ -112,3 +114,27 @@ def test_domain_stats(store):
     stats = store.domain_stats()
     assert stats[0]["domain"] == "example.com"
     assert stats[0]["n"] == 2
+
+
+def test_prune_queue(store):
+    store.enqueue("https://a.com", added_at="t1")
+    store.enqueue("https://b.com", added_at="t2")
+    store.enqueue("https://c.com", added_at="t3")
+    store.mark_crawled("https://b.com")
+    store.mark_failed("https://c.com")
+    deleted = store.prune_queue()
+    assert deleted == 2
+    stats = store.queue_stats()
+    assert stats.get("pending", 0) == 1
+    assert "crawled" not in stats
+    assert "failed" not in stats
+
+
+def test_stats_cache_invalidated_by_upsert(store):
+    store.upsert_document(Document(url="https://a.com", title="A", body="test", word_count=1))
+    assert store.document_count() == 1
+    # Freeze the cache timestamp so the next call would normally hit the cache
+    store._stats_ts = time.monotonic()
+    # upsert_document must reset _stats_ts to 0 so the next count is fresh
+    store.upsert_document(Document(url="https://b.com", title="B", body="test", word_count=1))
+    assert store.document_count() == 2

@@ -109,3 +109,12 @@ def test_stopword_only_query():
     _, qp = _build_index()
     results = qp.search("the and or but")
     assert results.hits == []
+
+
+def test_search_pagination_offset():
+    _, qp = _build_index()
+    all_results = qp.search("programming language", top_k=2, offset=0)
+    assert len(all_results.hits) >= 2
+    page2 = qp.search("programming language", top_k=1, offset=1)
+    assert len(page2.hits) == 1
+    assert page2.hits[0].url == all_results.hits[1].url
